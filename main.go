@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"time"
@@ -31,6 +32,7 @@ type model struct {
 	quitting  bool
 	width     int
 	height    int
+	animTick  int
 }
 
 var (
@@ -41,16 +43,10 @@ var (
 			Padding(0, 1).
 			MarginBottom(1)
 
-	bazingaStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#EE6FF8")).
-			Background(lipgloss.Color("#1A1A1A")).
-			Padding(1, 2).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#EE6FF8")).
-			Align(lipgloss.Center)
-
 	helpStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#626262")).MarginTop(1)
+
+	// Vibrant colors for the Bazinga! color-shifting animation
+	colors = []string{"#EE6FF8", "#7D56F4", "#00FFF0", "#FF007A", "#74FF33", "#FFF333"}
 )
 
 func initialModel() model {
@@ -101,27 +97,43 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.timer += 100 * time.Millisecond
 
 		if m.state == stateAnimating {
-			if m.timer >= 8*time.Second {
+			if m.timer >= 8000*time.Millisecond {
 				m.state = stateFinal
 				m.timer = 0 // Reset timer for the final screen wait
+				m.animTick = 0
 				return m, tick()
 			}
 
-			// Chaotic progress: jump between -0.1 and 0.3
-			increment := (rand.Float64() * 0.4) - 0.1
-			m.percent += increment
-			if m.percent < 0 {
-				m.percent = 0
-			}
-			if m.percent > 1.0 {
-				m.percent = 1.0
+			// Refined progress logic:
+			// 1. First 7.5s: chaotic jumps up to 0.9.
+			// 2. Last 0.5s: smooth finish to 1.0.
+			if m.timer < 7500*time.Millisecond {
+				// Chaotic progress: jump between -0.1 and 0.3
+				increment := (rand.Float64() * 0.4) - 0.1
+				m.percent += increment
+				if m.percent < 0 {
+					m.percent = 0
+				}
+				if m.percent > 0.9 {
+					m.percent = 0.9
+				}
+			} else {
+				// Final 500ms: Smooth finish from current % to 1.0
+				remaining := float64(8000*time.Millisecond-m.timer) / float64(500*time.Millisecond)
+				if remaining <= 0 {
+					m.percent = 1.0
+				} else {
+					// Linearly interpolate current value to 1.0
+					m.percent += (1.0 - m.percent) * 0.2 // Simple ease-out
+				}
 			}
 
 			return m, tick()
 		}
 
 		if m.state == stateFinal {
-			if m.timer >= 5*time.Second {
+			m.animTick++
+			if m.timer >= 10000*time.Millisecond {
 				m.state = stateInput
 				m.textInput.Reset()
 				m.percent = 0
@@ -150,6 +162,35 @@ func tick() tea.Cmd {
 	})
 }
 
+func (m model) getBazingaStyle() lipgloss.Style {
+	color := colors[m.animTick%len(colors)]
+	
+	// Responsive font size simulation: adjust padding and border based on terminal size
+	paddingX := 2
+	paddingY := 1
+	if m.width > 120 && m.height > 40 {
+		paddingX = 10
+		paddingY = 4
+	} else if m.width > 80 && m.height > 20 {
+		paddingX = 5
+		paddingY = 2
+	}
+
+	// Throbbing effect: oscillate padding slightly using Sine
+	throb := math.Abs(math.Sin(float64(m.animTick)*0.4)) * 2
+	paddingX += int(throb)
+	paddingY += int(throb / 2)
+
+	return lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color(color)).
+		Background(lipgloss.Color("#1A1A1A")).
+		Padding(paddingY, paddingX).
+		Border(lipgloss.ThickBorder()).
+		BorderForeground(lipgloss.Color(color)).
+		Align(lipgloss.Center)
+}
+
 func (m model) View() string {
 	if m.quitting {
 		return ""
@@ -174,7 +215,7 @@ func (m model) View() string {
 	case stateFinal:
 		content = fmt.Sprintf(
 			"%s\n\n%s",
-			bazingaStyle.Render("BAZINGA!"),
+			m.getBazingaStyle().Render("BAZINGA!"),
 			helpStyle.Render("Starting over soon..."),
 		)
 	}
