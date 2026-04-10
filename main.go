@@ -29,6 +29,8 @@ type model struct {
 	percent   float64
 	timer     time.Duration
 	quitting  bool
+	width     int
+	height    int
 }
 
 var (
@@ -73,6 +75,14 @@ func (m model) Init() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		m.progress.Width = m.width - 20
+		if m.progress.Width > 80 {
+			m.progress.Width = 80
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -88,11 +98,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tickMsg:
+		m.timer += 100 * time.Millisecond
+
 		if m.state == stateAnimating {
-			m.timer += 100 * time.Millisecond
-			if m.timer >= 2500*time.Millisecond {
+			if m.timer >= 8*time.Second {
 				m.state = stateFinal
-				return m, nil
+				m.timer = 0 // Reset timer for the final screen wait
+				return m, tick()
 			}
 
 			// Chaotic progress: jump between -0.1 and 0.3
@@ -105,6 +117,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.percent = 1.0
 			}
 
+			return m, tick()
+		}
+
+		if m.state == stateFinal {
+			if m.timer >= 5*time.Second {
+				m.state = stateInput
+				m.textInput.Reset()
+				m.percent = 0
+				m.timer = 0
+				return m, nil
+			}
 			return m, tick()
 		}
 
@@ -132,36 +155,43 @@ func (m model) View() string {
 		return ""
 	}
 
-	var s string
+	var content string
 
 	switch m.state {
 	case stateInput:
-		s = fmt.Sprintf(
-			"%s\n\n%s\n\n%s",
-			titleStyle.Render("BAZINGA! CLI"),
+		content = fmt.Sprintf(
+			"%s\n\n%s",
 			m.textInput.View(),
 			helpStyle.Render("Press Enter to continue • Press q or Ctrl+C to quit"),
 		)
 	case stateAnimating:
-		s = fmt.Sprintf(
+		content = fmt.Sprintf(
 			"%s\n\n%s\n\n%s",
 			titleStyle.Render("Processing your genius..."),
 			m.progress.ViewAs(m.percent),
 			helpStyle.Render("Wait for it..."),
 		)
 	case stateFinal:
-		s = fmt.Sprintf(
-			"\n\n%s\n\n%s",
+		content = fmt.Sprintf(
+			"%s\n\n%s",
 			bazingaStyle.Render("BAZINGA!"),
-			helpStyle.Render("Press q to exit"),
+			helpStyle.Render("Starting over soon..."),
 		)
 	}
 
-	return s + "\n"
+	// Center the content on the screen
+	return lipgloss.Place(
+		m.width,
+		m.height,
+		lipgloss.Center,
+		lipgloss.Center,
+		content,
+	)
 }
 
 func main() {
-	if _, err := tea.NewProgram(initialModel()).Run(); err != nil {
+	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
 		fmt.Printf("Alas, there's been an error: %v", err)
 		os.Exit(1)
 	}
