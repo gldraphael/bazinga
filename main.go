@@ -1,16 +1,29 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/ssh"
+	"github.com/charmbracelet/wish"
+	bm "github.com/charmbracelet/wish/bubbletea"
+	"github.com/charmbracelet/wish/logging"
+	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/env"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
 )
 
 type state int
@@ -175,8 +188,8 @@ func (m model) getBazingaStyle() lipgloss.Style {
 		paddingX = 5
 		paddingY = 2
 	}
-
-	// Throbbing effect: oscillate padding slightly using Sine
+	
+    // Throbbing effect: oscillate padding slightly using Sine
 	throb := math.Abs(math.Sin(float64(m.animTick)*0.4)) * 2
 	paddingX += int(throb)
 	paddingY += int(throb / 2)
@@ -219,7 +232,7 @@ func (m model) View() string {
 			helpStyle.Render("Starting over soon..."),
 		)
 	}
-
+	
 	// Center the content on the screen
 	return lipgloss.Place(
 		m.width,
@@ -230,10 +243,106 @@ func (m model) View() string {
 	)
 }
 
+// Config structure for koanf
+type Config struct {
+	SSH struct {
+		Enabled bool   `koanf:"enabled"`
+		Addr    string `koanf:"addr"`
+		HostKey string `koanf:"host_key"`
+	} `koanf:"ssh"`
+}
+
+func loadConfig() (*Config, error) {
+	var k = koanf.New(".")
+
+	// Load from YAML if it exists
+	if err := k.Load(file.Provider("config.yaml"), yaml.Parser()); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("error loading config.yaml: %w", err)
+		}
+	}
+
+	// Load from Environment Variables (prefix BAZINGA__, delimited by __)
+	if err := k.Load(env.Provider("BAZINGA__", ".", func(s string) string {
+		return strings.Replace(strings.ToLower(
+			strings.TrimPrefix(s, "BAZINGA__")), "__", ".", -1)
+	}), nil); err != nil {
+		return nil, fmt.Errorf("error loading environment variables: %w", err)
+	}
+
+	var cfg Config
+	if err := k.Unmarshal("", &cfg); err != nil {
+		return nil, fmt.Errorf("error unmarshaling config: %w", err)
+	}
+	
+	if cfg.SSH.Enabled {
+		if cfg.SSH.Addr == "" {
+			return nil, fmt.Errorf("ssh.addr is required")
+		}
+		if cfg.SSH.HostKey == "" {
+			return nil, fmt.Errorf("ssh.host_key is required")
+		}
+	}
+
+	return &cfg, nil
+}
+
+func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
+	_, _, active := s.Pty()
+	if !active {
+		wish.Fatalln(s, "no active terminal, moving on")
+		return nil, nil
+	}
+
+	m := initialModel()
+	return m, []tea.ProgramOption{tea.WithAltScreen()}
+}
+
 func main() {
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
-		fmt.Printf("Alas, there's been an error: %v", err)
+	cfg, err := loadConfig()
+	if err != nil {
+		fmt.Printf("Error loading config: %v\n", err)
 		os.Exit(1)
+	}
+
+	// If SSH is not enabled, run as a local CLI app
+	if !cfg.SSH.Enabled {
+		p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+		if _, err := p.Run(); err != nil {
+			fmt.Printf("Alas, there's been an error: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	s, err := wish.NewServer(
+		wish.WithAddress(cfg.SSH.Addr),
+		wish.WithHostKeyPath(cfg.SSH.HostKey),
+		wish.WithMiddleware(
+			bm.Middleware(teaHandler),
+			logging.Middleware(),
+		),
+	)
+	if err != nil {
+		fmt.Printf("Could not start server: %v\n", err)
+		os.Exit(1)
+	}
+
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	fmt.Printf("Starting SSH server on %s\n", cfg.SSH.Addr)
+	go func() {
+		if err = s.ListenAndServe(); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
+			fmt.Printf("Could not start server: %v\n", err)
+			done <- nil
+		}
+	}()
+
+	<-done
+	fmt.Println("Stopping SSH server...")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
+		fmt.Printf("Could not stop server: %v\n", err)
 	}
 }
