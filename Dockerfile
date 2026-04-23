@@ -31,13 +31,9 @@ RUN mkdir -p /data
 # Default configuration for SSH
 ENV BAZINGA__SSH__ENABLED=true
 ENV BAZINGA__SSH__ADDR=:2222
-ENV BAZINGA__SSH__HOST_KEY=/data/ssh_host_key
 
 # Expose the SSH port
 EXPOSE 2222
-
-# Volume for persistent host key
-VOLUME ["/data"]
 
 # Run the application
 ENTRYPOINT ["./bazinga"]
