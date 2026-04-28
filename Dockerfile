@@ -25,9 +25,6 @@ WORKDIR /app
 # Copy binary from builder
 COPY --from=builder /app/bazinga .
 
-# Create a directory for the host key
-RUN mkdir -p /data
-
 # Default configuration for SSH
 ENV BAZINGA__SSH__ENABLED=true
 ENV BAZINGA__SSH__ADDR=:2222
