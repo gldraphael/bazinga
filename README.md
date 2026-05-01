@@ -1,6 +1,20 @@
 # bazinga!
 
+## Demo
+
+**Prerequisites:** cloudflared
+
+```sh
+# Secure a cloudflare tunnel with bazinga.galdin.dev
+cloudflared access tcp --hostname bazinga.galdin.dev --url localhost:2222
+
+# In another terminal, ssh using the tunnel
+ssh -p 2222 localhost
+```
+
 ## Quickstart
+
+**Prequisites:** Podman (or Docker)
 
 ```sh
 # Pull & run the latest image
